@@ -13,7 +13,6 @@ from feedgen.entry import FeedEntry
 from feedgen.feed import FeedGenerator
 from mistune import Markdown
 from sortedcontainers import SortedDict
-from operator import itemgetter
 
 # Local
 from webapp.context import api_session
@@ -480,6 +479,20 @@ def cve_index():
     )
 
 
+def does_not_include_base_url(link):
+    default_reference_urls = [
+        "https://cve.mitre.org/",
+        "https://nvd.nist.gov",
+        "https://launchpad.net/",
+        "https://security-tracker.debian.org",
+        "https://ubuntu.com/security/notices",
+    ]
+    for base_url in default_reference_urls:
+        if base_url in link:
+            return False
+    return True
+
+
 def cve(cve_id):
     """
     Retrieve and display an individual CVE details page
@@ -494,6 +507,44 @@ def cve(cve_id):
         cve["published"] = dateutil.parser.parse(cve["published"]).strftime(
             "%-d %B %Y"
         )
+
+    if cve.get("updated_at"):
+        cve["updated_at"] = dateutil.parser.parse(cve["updated_at"]).strftime(
+            "%-d %B %Y"
+        )
+
+    if cve.get("notices"):
+        for notice in cve["notices"]:
+            notice["published"] = dateutil.parser.parse(
+                notice["published"]
+            ).strftime("%-d %B %Y")
+
+    if cve.get("notes"):
+        for note in cve["notes"]:
+            if "Priority reason" in note["note"]:
+                text = note["note"]
+                pattern = r"Priority reason:\n(.*)"
+                match = re.search(pattern, text)
+                if match:
+                    cve["priority_reason"] = match.group(1)
+
+    if cve.get("packages"):
+        for package in cve["packages"]:
+            for status in package["statuses"]:
+                if (
+                    status["pocket"] == "esm-infra"
+                    or status["pocket"] == "esm-apps"
+                ):
+                    cve["expanded_coverage"] = True
+                    break
+
+    # Format remaining references
+    other_references = []
+
+    if cve.get("references"):
+        for reference in cve["references"]:
+            if does_not_include_base_url(reference):
+                other_references.append(reference)
 
     # format patches
     formatted_patches = []
@@ -527,10 +578,21 @@ def cve(cve_id):
                     or "http://" in suffix
                     or "https://" in suffix
                 ):
+                    pattern = r"/commit/(.*)"
+                    match = re.search(pattern, suffix)
+                    if match:
+                        suffix_text = match.group(1)
+                    else:
+                        suffix_text = ""
+
                     formatted_patches.append(
                         {
                             "type": "link",
-                            "content": {"prefix": prefix, "suffix": suffix},
+                            "content": {
+                                "prefix": prefix,
+                                "suffix": suffix,
+                                "suffix_text": suffix_text,
+                            },
                             "name": package_name,
                         }
                     )
@@ -563,6 +625,7 @@ def cve(cve_id):
         tags=formatted_tags,
         kenetic_packages=kenetic_packages,
         melodic_packages=melodic_packages,
+        other_references=other_references,
     )
 
 
